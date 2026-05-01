@@ -143,6 +143,10 @@ test-rds-synthetic:
 test-k8s-synthetic:
 	$(PYTHON) -m tests.synthetic.eks.run_suite $(if $(SCENARIO),--scenario $(SCENARIO),)
 
+# Run Cloud-OpsBench RCA benchmark suite via the OpenSRE runner
+test-cloudopsbench:
+	$(PYTHON) -m tests.synthetic.cloudopsbench.run_suite $(if $(SYSTEM),--system $(SYSTEM),) $(if $(FAULT),--fault-category $(FAULT),) $(if $(CASE),--case $(CASE),) $(if $(LIMIT),--limit $(LIMIT),)
+
 # Boot local Grafana+Loki, seed deterministic test logs, then run the RCA pipeline
 # Requires GRAFANA_INSTANCE_URL + GRAFANA_READ_TOKEN in .env (see .env.example for local defaults)
 test-rca-grafana: grafana-local-up grafana-local-seed
@@ -551,6 +555,7 @@ help:
 	@echo "  make test-rca        - Run all RCA markdown alert tests in tests/e2e/rca/"
 	@echo "  make test-rca FILE=pipeline_error_in_logs - Run a single RCA alert test"
 	@echo "  make test-rds-synthetic - Run the synthetic RDS PostgreSQL RCA suite"
+	@echo "  make test-cloudopsbench - Run the Cloud-OpsBench synthetic RCA suite"
 	@echo "  make clean           - Clean up cache files"
 	@echo "  make lint            - Lint code with ruff"
 	@echo "  make format-check    - Check formatting with ruff (read-only)"
