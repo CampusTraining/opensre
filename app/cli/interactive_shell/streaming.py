@@ -31,6 +31,7 @@ def stream_to_console(
     *,
     label: str,
     chunks: Iterator[str],
+    suppress_if_starts_with: str | None = None,
 ) -> str:
     """Render a streaming LLM response live, return the accumulated text.
 
@@ -49,11 +50,42 @@ def stream_to_console(
     If the stream raises mid-flight, whatever was accumulated remains on
     screen as the exception propagates so the caller can surface an
     error label below the partial response.
+
+    ``suppress_if_starts_with`` peeks the first non-whitespace character
+    of the stream. If it matches, the stream is drained silently and the
+    full text is returned without rendering — useful when the response
+    might be a JSON action plan that should not leak to the UI. The
+    caller decides what to do with the buffered text.
     """
     if not console.is_terminal:
-        return "".join(chunks)
+        text = "".join(chunks)
+        if suppress_if_starts_with is not None and text.lstrip().startswith(
+            suppress_if_starts_with
+        ):
+            # Caller suppresses raw payload (e.g. JSON action plan); return only.
+            return text
+        if text:
+            console.print()
+            console.print(f"[{TERMINAL_ACCENT_BOLD}]{label}:[/]")
+            console.print(Markdown(text))
+            console.print()
+        return text
 
-    buffer: list[str] = []
+    chunks_iter = iter(chunks)
+    peeked: list[str] = []
+
+    if suppress_if_starts_with is not None:
+        for chunk in chunks_iter:
+            peeked.append(chunk)
+            stripped = "".join(peeked).lstrip()
+            if not stripped:
+                continue
+            if stripped.startswith(suppress_if_starts_with):
+                # Suppressed: drain remaining silently and return.
+                return "".join(peeked) + "".join(chunks_iter)
+            break
+
+    buffer: list[str] = list(peeked)
     spinner = Spinner(
         _SPINNER_NAME,
         text=Text(f"{_SPINNER_LABEL}…", style=f"bold {_SPINNER_COLOR}"),
@@ -65,7 +97,9 @@ def stream_to_console(
 
     try:
         with Live(spinner, console=console, refresh_per_second=10, transient=False) as live:
-            for chunk in chunks:
+            if buffer:
+                live.update(Markdown("".join(buffer)))
+            for chunk in chunks_iter:
                 if not chunk:
                     continue
                 buffer.append(chunk)

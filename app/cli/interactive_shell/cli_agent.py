@@ -10,8 +10,8 @@ from rich.markdown import Markdown
 from rich.markup import escape
 
 from app.cli.interactive_shell.cli_reference import build_cli_reference_text
-from app.cli.interactive_shell.loaders import llm_loader
 from app.cli.interactive_shell.session import ReplSession
+from app.cli.interactive_shell.streaming import stream_to_console
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD
 
 # Cap stored (user, assistant) pairs; list holds 2 entries per turn.
@@ -275,15 +275,20 @@ def answer_cli_agent(
     prompt = f"{system}\n{user_block}"
 
     try:
-        with llm_loader(console):
-            client = get_llm_for_reasoning()
-            response = client.invoke(prompt)
+        client = get_llm_for_reasoning()
+        text_str = stream_to_console(
+            console,
+            label="assistant",
+            chunks=client.invoke_stream(prompt),
+            # Suppress the live render if the model is emitting a JSON action
+            # plan: that payload is consumed by ``_execute_action_plan`` and
+            # would otherwise leak raw braces to the user (#1263).
+            suppress_if_starts_with="{",
+        )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]assistant failed:[/red] {escape(str(exc))}")
         return
 
-    text = getattr(response, "content", None) or str(response)
-    text_str = str(text)
     actions = _parse_action_plan(text_str)
     if _execute_action_plan(actions, session, console):
         session.cli_agent_messages.append(("user", message))
@@ -299,13 +304,14 @@ def answer_cli_agent(
     if len(session.cli_agent_messages) > cap:
         session.cli_agent_messages[:] = session.cli_agent_messages[-cap:]
 
-    console.print()
-    console.print(f"[{TERMINAL_ACCENT_BOLD}]assistant:[/]")
-    # Render the answer as Markdown so tables, bold, lists, and code spans
-    # display correctly in the terminal instead of leaking raw `**bold**`,
-    # `| col |` table syntax, etc. (#604).
-    console.print(Markdown(text_str))
-    console.print()
+    # If the response was suppressed (looked like a JSON action plan) but no
+    # valid actions parsed, render it now as Markdown so the user sees
+    # something. The non-suppressed path was already rendered live.
+    if text_str.lstrip().startswith("{") and text_str.strip():
+        console.print()
+        console.print(f"[{TERMINAL_ACCENT_BOLD}]assistant:[/]")
+        console.print(Markdown(text_str))
+        console.print()
 
 
 __all__ = ["answer_cli_agent"]

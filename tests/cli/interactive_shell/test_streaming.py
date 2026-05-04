@@ -36,9 +36,9 @@ def _yield_chunks(chunks: list[str]) -> Iterator[str]:
 
 
 class TestNonTtyFallback:
-    """On a non-terminal console the helper drains silently and returns the full text."""
+    """On a non-terminal console the helper drains, prints, and returns the full text."""
 
-    def test_drains_stream_and_returns_full_text(self) -> None:
+    def test_drains_stream_and_prints_without_live_artifacts(self) -> None:
         console, buf = _non_tty_console()
         result = stream_to_console(
             console,
@@ -46,10 +46,28 @@ class TestNonTtyFallback:
             chunks=_yield_chunks(["Hel", "lo, ", "world"]),
         )
 
+        output = buf.getvalue()
         assert result == "Hello, world"
-        # No Live-region escape sequences leak into captured output.
-        assert "thinking" not in buf.getvalue()
-        assert "assistant:" not in buf.getvalue()
+        # Header + text reach piped output so captured logs are useful.
+        assert "assistant:" in output
+        assert "Hello, world" in output
+        # No spinner / Live cursor-movement artifacts in non-TTY captures.
+        assert "thinking" not in output
+
+    def test_suppression_drains_silently_in_non_tty(self) -> None:
+        """Suppressed payloads (JSON action plans) must not appear in piped output."""
+        console, buf = _non_tty_console()
+        result = stream_to_console(
+            console,
+            label="assistant",
+            chunks=_yield_chunks(['{"actions"', ":[]}"]),
+            suppress_if_starts_with="{",
+        )
+
+        assert result == '{"actions":[]}'
+        output = buf.getvalue()
+        assert "assistant:" not in output
+        assert '{"actions"' not in output
 
 
 class TestTtyLiveRender:
@@ -107,3 +125,50 @@ class TestMidStreamError:
         # so the caller can surface an error label below it.
         output = _strip_ansi(buf.getvalue())
         assert "partial answer" in output
+
+
+class TestSuppressionPeek:
+    """``suppress_if_starts_with`` skips live rendering for content the caller will handle."""
+
+    def test_suppresses_and_drains_when_first_char_matches(self) -> None:
+        console, buf = _tty_console()
+        result = stream_to_console(
+            console,
+            label="assistant",
+            chunks=_yield_chunks(['{"actions"', ":[]", "}"]),
+            suppress_if_starts_with="{",
+        )
+
+        assert result == '{"actions":[]}'
+        # No header, no markdown, no live-region artifacts in captured output.
+        output = _strip_ansi(buf.getvalue())
+        assert "assistant:" not in output
+        assert '{"actions"' not in output
+
+    def test_renders_normally_when_first_char_does_not_match(self) -> None:
+        console, buf = _tty_console()
+        result = stream_to_console(
+            console,
+            label="assistant",
+            chunks=_yield_chunks(["Hello, ", "world"]),
+            suppress_if_starts_with="{",
+        )
+
+        assert result == "Hello, world"
+        output = _strip_ansi(buf.getvalue())
+        assert "assistant:" in output
+        assert "Hello, world" in output
+
+    def test_skips_leading_whitespace_before_deciding(self) -> None:
+        """Leading whitespace must not block the suppression peek."""
+        console, buf = _tty_console()
+        result = stream_to_console(
+            console,
+            label="assistant",
+            chunks=_yield_chunks(["  \n", '{"action"', ':"slash"}']),
+            suppress_if_starts_with="{",
+        )
+
+        assert result == '  \n{"action":"slash"}'
+        output = _strip_ansi(buf.getvalue())
+        assert "assistant:" not in output
