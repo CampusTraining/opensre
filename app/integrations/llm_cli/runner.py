@@ -8,6 +8,7 @@ import re
 import subprocess
 import threading
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel
@@ -193,3 +194,7 @@ class CLIBackedLLMClient:
             extra={"provider": self._adapter.name, "cli_cost_unknown": True},
         )
         return LLMResponse(content=content)
+
+    def invoke_stream(self, prompt_or_messages: Any) -> Iterator[str]:
+        """CLI subprocesses can't stream; fall back to invoke() and yield once."""
+        yield self.invoke(prompt_or_messages).content

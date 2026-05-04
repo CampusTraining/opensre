@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -98,11 +99,16 @@ class LLMClient:
             self._api_key = api_key
             self._client = Anthropic(api_key=api_key, timeout=60.0)
 
-    def invoke(self, prompt_or_messages: Any) -> LLMResponse:
+    def _build_request_kwargs(self, prompt_or_messages: Any) -> dict[str, Any]:
+        """Refresh credentials, normalize messages, apply guardrails, and build API kwargs.
+
+        Shared by ``invoke`` and ``invoke_stream`` so both paths apply the same
+        pre-flight (credential refresh, guardrail redaction, kwargs shape).
+        """
         self._ensure_client()
         system, messages = _normalize_messages(prompt_or_messages)
 
-        from app.guardrails.engine import GuardrailBlockedError, get_guardrail_engine
+        from app.guardrails.engine import get_guardrail_engine
 
         engine = get_guardrail_engine()
         if engine.is_active:
@@ -120,6 +126,12 @@ class LLMClient:
             kwargs["system"] = system
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
+        return kwargs
+
+    def invoke(self, prompt_or_messages: Any) -> LLMResponse:
+        from app.guardrails.engine import GuardrailBlockedError
+
+        kwargs = self._build_request_kwargs(prompt_or_messages)
 
         backoff_seconds = 1.0
         max_attempts = 3
@@ -145,6 +157,17 @@ class LLMClient:
 
         content = _extract_text(response)
         return LLMResponse(content=content)
+
+    def invoke_stream(self, prompt_or_messages: Any) -> Iterator[str]:
+        """Yield text chunks as the model emits them; no retry on mid-stream failure."""
+        kwargs = self._build_request_kwargs(prompt_or_messages)
+        try:
+            with self._client.messages.stream(**kwargs) as stream:
+                yield from stream.text_stream
+        except AuthenticationError as err:
+            raise RuntimeError(
+                "Anthropic authentication failed. Check ANTHROPIC_API_KEY in your environment or .env."
+            ) from err
 
 
 class BedrockLLMClient:
@@ -285,11 +308,16 @@ class OpenAILLMClient:
                 default_headers=self._default_headers,
             )
 
-    def invoke(self, prompt_or_messages: Any) -> LLMResponse:
+    def _build_request_kwargs(self, prompt_or_messages: Any) -> dict[str, Any]:
+        """Refresh credentials, normalize messages, apply guardrails, and build API kwargs.
+
+        Shared by ``invoke`` and ``invoke_stream`` so both paths apply the same
+        pre-flight (credential refresh, guardrail redaction, kwargs shape).
+        """
         self._ensure_client()
         messages = _normalize_messages_openai(prompt_or_messages)
 
-        from app.guardrails.engine import GuardrailBlockedError, get_guardrail_engine
+        from app.guardrails.engine import get_guardrail_engine
 
         engine = get_guardrail_engine()
         if engine.is_active:
@@ -306,6 +334,12 @@ class OpenAILLMClient:
         }
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
+        return kwargs
+
+    def invoke(self, prompt_or_messages: Any) -> LLMResponse:
+        from app.guardrails.engine import GuardrailBlockedError
+
+        kwargs = self._build_request_kwargs(prompt_or_messages)
 
         backoff_seconds = 1.0
         max_attempts = 3
@@ -335,6 +369,21 @@ class OpenAILLMClient:
             raise RuntimeError("OpenAI API returned an empty choices list")
         content = response.choices[0].message.content or ""
         return LLMResponse(content=content.strip())
+
+    def invoke_stream(self, prompt_or_messages: Any) -> Iterator[str]:
+        """Yield text chunks as the model emits them; no retry on mid-stream failure."""
+        kwargs = self._build_request_kwargs(prompt_or_messages)
+        try:
+            for chunk in self._client.chat.completions.create(stream=True, **kwargs):
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except OpenAIAuthError as err:
+            raise RuntimeError(
+                f"{self._provider_label} authentication failed. Check {self._api_key_env} in your environment, .env, or secure local keychain."
+            ) from err
 
 
 class StructuredOutputClient:
@@ -375,6 +424,9 @@ class SupportsLLMInvoke(Protocol):
         pass
 
     def invoke(self, prompt_or_messages: Any) -> LLMResponse:
+        pass
+
+    def invoke_stream(self, prompt_or_messages: Any) -> Iterator[str]:
         pass
 
 
