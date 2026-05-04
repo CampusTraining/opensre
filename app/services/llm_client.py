@@ -235,6 +235,10 @@ class BedrockLLMClient:
         content = _extract_text(response)
         return LLMResponse(content=content)
 
+    def invoke_stream(self, prompt_or_messages: Any) -> Iterator[str]:
+        """Bedrock streaming is a deferred follow-up; fall back to invoke() for now."""
+        yield self.invoke(prompt_or_messages).content
+
 
 def _format_anthropic_retry_error(err: Exception) -> str:
     """Format a user-facing Anthropic retry failure message."""
