@@ -10,12 +10,11 @@ RUN apt-get update \
 
 COPY . .
 
-RUN pip install --no-cache-dir -e . \
-    && pip install --no-cache-dir "langgraph-cli[inmem]>=0.1.55"
+RUN pip install --no-cache-dir -e .
 
-EXPOSE 2024
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:2024/ok || exit 1
+    CMD curl -f http://localhost:8080/ok || exit 1
 
-CMD ["langgraph", "dev", "--host", "0.0.0.0", "--port", "2024", "--no-browser"]
+CMD ["uvicorn", "app.remote.server:app", "--host", "0.0.0.0", "--port", "8080"]
