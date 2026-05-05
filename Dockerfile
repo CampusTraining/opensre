@@ -1,40 +1,21 @@
-# Production Dockerfile for OpenSRE
-# Builds a container image that runs the LangGraph API server in production.
-#
-# Usage:
-#   docker build -t opensre:latest .
-#   docker run -p 2024:2024 --env-file .env opensre:latest
-#
-# Health check:
-#   curl http://localhost:2024/ok
-#
-# The server exposes the LangGraph API on port 2024 with endpoints:
-#   - GET /ok          - Health check endpoint
-#   - POST /threads    - Create conversation threads
-#   - POST /threads/{id}/runs - Execute agent runs
-#   - GET  /threads/{id}/state  - Get run state and results
+FROM python:3.11-slim
 
-FROM langchain/langgraph-api:3.11
+WORKDIR /app
 
-# Add the application source for installation and runtime loading.
-ADD . /deps/agent
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install the package and its dependencies into the API image.
-RUN PYTHONDONTWRITEBYTECODE=1 \
-    pip install --no-cache-dir -c /api/constraints.txt /deps/agent
+COPY . .
 
-# Configure the LangGraph API server to load the app graph.
-#
-# Intentionally omit custom auth here: self-hosted LangGraph deployments on
-# Railway do not support the enterprise-only custom auth mode used by the
-# Tracer-hosted path.
-ENV LANGSERVE_GRAPHS='{"agent":"/deps/agent/app/graph_pipeline.py:build_graph"}'
+RUN pip install --no-cache-dir -e . \
+    && pip install --no-cache-dir "langgraph-cli[inmem]"
 
-WORKDIR /deps/agent
-
-# Expose the LangGraph API port
 EXPOSE 2024
 
-# Health check - the LangGraph API server exposes /ok.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:2024/ok', timeout=5)" || exit 1
+    CMD curl -f http://localhost:2024/ok || exit 1
+
+CMD ["langgraph", "dev", "--host", "0.0.0.0", "--port", "2024", "--no-browser"]
