@@ -11,7 +11,7 @@ RUN apt-get update \
 COPY . .
 
 RUN pip install --no-cache-dir -e . \
-    && pip install --no-cache-dir "langgraph-cli[inmem]"
+    && pip install --no-cache-dir "langgraph-cli[inmem]>=0.1.55"
 
 EXPOSE 2024
 
