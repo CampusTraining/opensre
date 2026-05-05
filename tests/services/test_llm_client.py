@@ -108,6 +108,130 @@ def test_openai_llm_client_rebuilds_client_when_key_rotates(monkeypatch) -> None
     assert _FakeOpenAI.init_api_keys == ["first-key", "second-key"]
 
 
+class _InactiveGuardrailEngine:
+    is_active = False
+
+    def apply(self, content: str) -> str:
+        return content
+
+
+class _RecordingBedrockRuntime:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.converse_calls: list[dict] = []
+
+    def converse(self, **kwargs) -> dict:
+        self.converse_calls.append(kwargs)
+        return self.response
+
+
+def test_is_anthropic_bedrock_model_claude_ids() -> None:
+    assert llm_client._is_anthropic_bedrock_model("anthropic.claude-3-haiku-20240307-v1:0")
+    assert llm_client._is_anthropic_bedrock_model(
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    )
+
+
+def test_is_anthropic_bedrock_model_foundation_model_arn() -> None:
+    arn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0"
+    assert llm_client._is_anthropic_bedrock_model(arn)
+
+
+def test_is_anthropic_bedrock_model_non_anthropic() -> None:
+    assert not llm_client._is_anthropic_bedrock_model(
+        "mistral.mistral-large-2402-v1:0",
+    )
+
+
+def test_is_anthropic_bedrock_model_application_inference_profile_arn() -> None:
+    profile_arn = (
+        "arn:aws:bedrock:us-east-2:012345678901:application-inference-profile/a1b2c3profile"
+    )
+    assert not llm_client._is_anthropic_bedrock_model(profile_arn)
+
+
+def test_bedrock_client_routes_mistral_to_converse(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.guardrails.engine.get_guardrail_engine",
+        _InactiveGuardrailEngine,
+    )
+    runtime = _RecordingBedrockRuntime(
+        {"output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}}},
+    )
+    monkeypatch.setattr(llm_client.boto3, "client", lambda *_a, **_k: runtime)
+
+    client = llm_client.BedrockLLMClient(model="mistral.mistral-large-2402-v1:0")
+    assert client._use_anthropic is False
+
+    resp = client.invoke([{"role": "user", "content": "hi"}])
+    assert resp.content == "ok"
+    assert len(runtime.converse_calls) == 1
+    call = runtime.converse_calls[0]
+    assert call["modelId"] == "mistral.mistral-large-2402-v1:0"
+    assert call["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+    ]
+    assert "system" not in call
+
+
+def test_invoke_converse_includes_optional_system_temperature(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.guardrails.engine.get_guardrail_engine",
+        _InactiveGuardrailEngine,
+    )
+    runtime = _RecordingBedrockRuntime(
+        {"output": {"message": {"role": "assistant", "content": [{"text": ""}, {"text": "x"}]}}},
+    )
+    monkeypatch.setattr(llm_client.boto3, "client", lambda *_a, **_k: runtime)
+
+    client = llm_client.BedrockLLMClient(model="mistral.mini", temperature=0.4)
+    client.invoke(
+        [
+            {"role": "system", "content": "context"},
+            {"role": "user", "content": "q"},
+        ],
+    )
+
+    kwargs = runtime.converse_calls[0]
+    assert kwargs["system"] == [{"text": "context"}]
+    assert kwargs["inferenceConfig"]["temperature"] == 0.4
+
+
+def test_invoke_converse_raises_when_no_text_blocks(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.guardrails.engine.get_guardrail_engine",
+        _InactiveGuardrailEngine,
+    )
+    runtime = _RecordingBedrockRuntime(
+        {
+            "stopReason": "tool_use",
+            "output": {"message": {"role": "assistant", "content": [{"toolUse": {"name": "x"}}]}},
+        },
+    )
+    monkeypatch.setattr(llm_client.boto3, "client", lambda *_a, **_k: runtime)
+
+    client = llm_client.BedrockLLMClient(model="mistral.mini")
+    with pytest.raises(RuntimeError, match="no text content"):
+        client.invoke("hello")
+
+
+def test_bedrock_application_inference_profile_arn_uses_converse(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.guardrails.engine.get_guardrail_engine",
+        _InactiveGuardrailEngine,
+    )
+    runtime = _RecordingBedrockRuntime(
+        {"output": {"message": {"role": "assistant", "content": [{"text": "via-converse"}]}}},
+    )
+    monkeypatch.setattr(llm_client.boto3, "client", lambda *_a, **_k: runtime)
+
+    arn = "arn:aws:bedrock:us-west-2:123:application-inference-profile/p2"
+    client = llm_client.BedrockLLMClient(model=arn)
+
+    assert client._use_anthropic is False
+    assert client.invoke("hi").content == "via-converse"
+
+
 def test_anthropic_llm_client_reads_secure_local_api_key(monkeypatch) -> None:
     monkeypatch.setattr(
         llm_client,

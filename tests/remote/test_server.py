@@ -411,7 +411,6 @@ def test_check_memory_health_returns_warn_when_at_threshold(
 def test_check_memory_health_returns_missing_when_proc_file_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-
     class _FakeMeminfoPath:
         def __init__(self, *_args, **_kwargs) -> None:
             pass
@@ -453,7 +452,6 @@ def test_check_memory_health_returns_missing_when_memtotal_absent(
 def test_check_memory_health_returns_missing_when_memavailable_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-
     class _FakeIncompletePath:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
