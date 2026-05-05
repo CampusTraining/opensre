@@ -152,6 +152,14 @@ def query_grafana_logs(
             "logs": [],
         }
 
+    if not service_name or not service_name.strip():
+        return {
+            "source": "grafana_loki",
+            "available": False,
+            "error": "No service_name available for Loki query",
+            "logs": [],
+        }
+
     def _build_query(label: str, value: str) -> str:
         if execution_run_id:
             return f'{{{label}="{value}"}} |= "{execution_run_id}"'
