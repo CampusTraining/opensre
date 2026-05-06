@@ -332,39 +332,36 @@ def deep_health_check() -> dict[str, Any]:
     }
 
 
-@app.post("/investigate", response_model=InvestigateResponse)
-def investigate(req: InvestigateRequest) -> InvestigateResponse:
-    """Run an investigation and persist the result as a ``.md`` file."""
-    try:
-        raw_alert = _normalized_request_alert(req)
-        result, alert_name, pipeline_name, severity = _execute_investigation(
-            raw_alert=raw_alert,
-            alert_name=req.alert_name,
-            pipeline_name=req.pipeline_name,
-            severity=req.severity,
+@app.post("/investigate", status_code=202)
+async def investigate(req: InvestigateRequest, background_tasks: BackgroundTasks) -> dict:
+    """Accept an alert and run the investigation in the background.
+
+    Returns 202 immediately so Grafana webhooks don't time out and retry.
+    """
+    inv_id = _make_id(req.alert_name or "incident")
+
+    def _run() -> None:
+        try:
+            raw_alert = _normalized_request_alert(req)
+            result, alert_name, pipeline_name, severity = _execute_investigation(
+                raw_alert=raw_alert,
+                alert_name=req.alert_name,
+                pipeline_name=req.pipeline_name,
+                severity=req.severity,
+            )
+        except Exception:
+            logger.exception("Investigation failed")
+            return
+        _save_investigation(
+            inv_id=inv_id,
+            alert_name=alert_name,
+            pipeline_name=pipeline_name,
+            severity=severity,
+            result=result,
         )
-    except VercelResolutionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Investigation failed")
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
-    inv_id = _make_id(alert_name)
-    _save_investigation(
-        inv_id=inv_id,
-        alert_name=alert_name,
-        pipeline_name=pipeline_name,
-        severity=severity,
-        result=result,
-    )
-
-    return InvestigateResponse(
-        id=inv_id,
-        report=result.get("report", ""),
-        root_cause=result.get("root_cause", ""),
-        problem_md=result.get("problem_md", ""),
-        is_noise=bool(result.get("is_noise")),
-    )
+    background_tasks.add_task(_run)
+    return {"id": inv_id, "status": "accepted"}
 
 
 @app.post("/investigate/stream")

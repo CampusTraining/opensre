@@ -429,6 +429,9 @@ def detect_sources(
         or annotations.get("service")
         or raw_alert.get("service_name", "")
         or raw_alert.get("service", "")
+        or common_labels.get("service_name", "")
+        or common_labels.get("service", "")
+        or common_labels.get("Service", "")
         or pipeline_name
     ).strip()
 
