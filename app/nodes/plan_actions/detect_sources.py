@@ -520,7 +520,7 @@ def detect_sources(
         if has_backend or (endpoint and (api_key or grafana_local)):
             grafana_service_name = (
                 _map_pipeline_to_service_name(pipeline_name) if pipeline_name else service_name
-            )
+            ).lower()
 
             grafana_params: dict[str, Any] = {
                 "service_name": grafana_service_name,
