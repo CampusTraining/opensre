@@ -338,6 +338,11 @@ async def investigate(req: InvestigateRequest, background_tasks: BackgroundTasks
 
     Returns 202 immediately so Grafana webhooks don't time out and retry.
     """
+    raw = req.raw_alert or {}
+    status_val = (raw.get("status") or "").upper()
+    if status_val == "RESOLVED":
+        return {"id": None, "status": "ignored"}
+
     inv_id = _make_id(req.alert_name or "incident")
 
     def _run() -> None:
