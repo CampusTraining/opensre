@@ -518,10 +518,12 @@ def detect_sources(
         has_backend = "_backend" in grafana_int
         # Local Grafana uses anonymous auth; injected backends don't need credentials at all.
         if has_backend or (endpoint and (api_key or grafana_local)):
-            service_name = _map_pipeline_to_service_name(pipeline_name) if pipeline_name else ""
+            grafana_service_name = (
+                _map_pipeline_to_service_name(pipeline_name) if pipeline_name else service_name
+            )
 
             grafana_params: dict[str, Any] = {
-                "service_name": service_name,
+                "service_name": grafana_service_name,
                 "pipeline_name": pipeline_name,
                 "connection_verified": True,
                 "grafana_endpoint": endpoint,
